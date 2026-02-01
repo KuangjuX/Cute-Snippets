@@ -54,8 +54,16 @@ The goal of this repository is to bridge the gap between low-level GPU hardware 
 git clone https://github.com/yourusername/Cute-Snippets.git
 cd Cute-Snippets
 
-# Install dependencies (assuming cutedsl is available)
+# Install the package in development mode (recommended)
+pip install -e .
+
+# Or install dependencies only (assuming cutedsl is available)
 pip install nvidia-cutlass-dsl torch
+```
+
+**Note**: Installing with `pip install -e .` ensures that the `htile` module can be imported from anywhere. Alternatively, you can set the `PYTHONPATH` environment variable:
+```bash
+export PYTHONPATH="${PYTHONPATH}:$(pwd)"
 ```
 
 ### Running Examples

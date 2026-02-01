@@ -1,0 +1,19 @@
+{
+  // Python 格式化配置
+  "[python]": {
+    "editor.formatOnSave": true,
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.codeActionsOnSave": {
+      "source.organizeImports": "explicit"
+    }
+  },
+  // Black 格式化工具配置
+  "black-formatter.args": [
+    "--line-length=80"
+  ],
+  // 如果使用其他格式化工具，可以取消注释以下配置
+  // "[python]": {
+  //   "editor.formatOnSave": true,
+  //   "editor.defaultFormatter": "ms-python.autopep8"
+  // }
+}
