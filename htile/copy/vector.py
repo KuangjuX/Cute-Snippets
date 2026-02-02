@@ -6,19 +6,20 @@ from cutlass import const_expr, Int32
 
 from typing import Type, Optional
 
-class VectorCopy():
+
+class VectorCopy:
     def __init__(
         self,
         dtype: Type[cutlass.Numeric],
         threads_per_row: int,
         num_threads: int,
-        num_copy_elems: int = 1
+        num_copy_elems: int = 1,
     ):
         self.dtype = dtype
         self.threads_per_row = threads_per_row
         self.num_threads = num_threads
         self.num_copy_elems = num_copy_elems
-        self.num_copy_bits = num_copy_elems * self.threads_per_row
+        self.num_copy_bits = num_copy_elems * dtype.width
 
     def _threads_per_row(self):
         return self.threads_per_row
@@ -30,12 +31,16 @@ class VectorCopy():
         return self.num_copy_elems
 
     def tiled_copy_2d(self, is_async: bool = False):
-        copy_op = cpasync.CopyG2SOp() if is_async else cute.nvgpu.CopyUniversalOp()
-        copy_atom = cute.make_copy_atom(copy_op, self.dtype, num_bits_per_copy=self.num_copy_bits)
+        copy_op = (
+            cpasync.CopyG2SOp() if is_async else cute.nvgpu.CopyUniversalOp()
+        )
+        copy_atom = cute.make_copy_atom(
+            copy_op, self.dtype, num_bits_per_copy=self.num_copy_bits
+        )
 
         thr_layout = cute.make_ordered_layout(
             (self.num_threads // self.threads_per_row, self.threads_per_row),
-            order=(1, 0)
+            order=(1, 0),
         )
 
         val_layout = cute.make_layout((1, self.num_copy_elems))
@@ -43,7 +48,7 @@ class VectorCopy():
         return cute.make_tiled_copy_tv(copy_atom, thr_layout, val_layout)
 
     @cute.jit
-    def predicate_k(tAcA: cute.Tensor, limit: Int32) -> cute.Tensor:
+    def predicate_k(self, tAcA: cute.Tensor, limit: Int32) -> cute.Tensor:
         """
         为 K 维度（通常是矩阵的列维度）生成断言张亮（Predicate Tensor），用于处理非对齐内存访问。
 
@@ -73,8 +78,12 @@ class VectorCopy():
         # 同一个位置，这实现了广播，进一步节省了寄存器空间（共享同一套列边界检查逻辑，
         # 列边界 N 对所有行都是一样的）。
         tApA = cute.make_fragment(
-            cute.make_layout(cute.size(tAcA, mode=[0, 1]), cute.size(tAcA, mode=[1]), cute.size(tAcA, mode=[2])),
-            stride=(cute.size(tAcA, mode=[2]), 0, 1)
+            cute.make_layout(
+                cute.size(tAcA, mode=[0, 1]),
+                cute.size(tAcA, mode=[1]),
+                cute.size(tAcA, mode=[2]),
+            ),
+            stride=(cute.size(tAcA, mode=[2]), 0, 1),
         )
 
         # 2. 遍历线程负责的所有逻辑块
@@ -86,13 +95,13 @@ class VectorCopy():
                 # 3. 提取列索引并进行辩解比较
                 # tAcA[(0, rest_v), 0, rest_k] 获取当前位置的坐标元组(row, col)
                 # [1] 提取坐标中的第二个分量，即列索引（column index / k-index）
-                # cute.elem_less 会生成，如果 col_idx < limit 则为 True，否则为 False 
+                # cute.elem_less 会生成，如果 col_idx < limit 则为 True，否则为 False
                 # 这确保了当 N 不是 Tile 大小整数倍的时，越界的内存方位会被掩码屏蔽
-                tApA[rest_v, 0, rest_k] = cute.elem_less(tAcA[(0, rest_v), 0, rest_k][1], limit)
+                tApA[rest_v, 0, rest_k] = cute.elem_less(
+                    tAcA[(0, rest_v), 0, rest_k][1], limit
+                )
 
         return tApA
-    
-
 
 
 @dsl_user_op
@@ -111,6 +120,8 @@ def vector_copy(
 
     num_copy_bits = const_expr(min(128, num_copy_elems * dtype.width))
     copy_op = cpasync.CopyG2SOp() if is_async else cute.nvgpu.CopyUniversalOp()
-    copy_atom = cute.make_copy_atom(copy_op, dtype, num_bits_per_copy=num_copy_bits)
+    copy_atom = cute.make_copy_atom(
+        copy_op, dtype, num_bits_per_copy=num_copy_bits
+    )
 
     cute.copy(copy_atom, src, dst, pred=pred, loc=loc, ip=ip, **kwargs)

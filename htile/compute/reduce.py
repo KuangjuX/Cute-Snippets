@@ -2,9 +2,91 @@ import cutlass
 import cutlass.cute as cute
 from cutlass import Int32, Float32, const_expr
 
-from typing import Optional, Callable
+from typing import Optional, Callable, Type
 
 import operator
+
+
+class ReduceLayout:
+    """
+    Reduce buffer for warp-level and cluster-level reductions.
+    It has shape (num_warps // warps_per_row, (warps_per_row, cluster_n), stage)
+    """
+
+    def __init__(
+        self,
+        threads: int,
+        threads_per_row: int,
+        cluster_n: int,
+        stage: int,
+    ):
+        self.warps_per_row = threads_per_row // cute.arch.WARP_SIZE
+        self.num_warps = threads // cute.arch.WARP_SIZE
+        self.cluster_n = cluster_n
+        self.stage = stage
+
+    @cute.jit
+    def make_layout(self) -> cute.Layout:
+        """
+        Returns the reduction buffer layout.
+
+        Returns:
+            The CuTe layout for the reduction buffer with shape
+            (num_warps // warps_per_row, (warps_per_row, cluster_n), stage).
+        """
+        reduce_layout = cute.make_ordered_layout(
+            (
+                self.num_warps // self.warps_per_row,
+                (self.warps_per_row, self.cluster_n),
+                self.stage,
+            ),
+            order=(1, 0, 2),
+        )
+        return reduce_layout
+
+
+@cute.jit
+def block_reduce(
+    val: cute.Numeric,
+    op: Callable,
+    reduction_buffer: cute.Tensor,
+    init_val: cute.Numeric = 0.0,
+) -> cute.Numeric:
+    """
+    Block reduction for warp-level reductions.
+    reduction_buffer has shape (num_waprs / warp_per_row, warp_per_row)
+    """
+    lane_idx, warp_idx = cute.arch.lane_idx(), cute.arch.warp_idx()
+    warps_per_row = cute.size(reduction_buffer.shape[1])
+    row_idx, col_idx = warp_idx // warps_per_row, warp_idx % warps_per_row
+
+    if lane_idx == 0:
+        reduction_buffer[row_idx, col_idx] = val
+
+    cute.arch.barrier()
+
+    block_reduce_val = init_val
+    if lane_idx < warps_per_row:
+        block_reduce_val = reduction_buffer[row_idx, lane_idx]
+
+    return cute.arch.warp_reduction(block_reduce_val, op)
+
+
+@cute.jit
+def block_or_cluster_reduce(
+    val: cute.Numeric,
+    op: Callable,
+    reduction_buffer: cute.Tensor,
+    mbar_ptr: Optional[cute.Pointer],
+    phase: Optional[Int32] = None,
+    init_val: cute.Numeric = 0.0,
+) -> cute.Numeric:
+    """
+    Block or cluster reduction for warp-level or cluster-level reductions.
+    """
+    # block_reduce handles reduction across warps within a block
+    # When cluster_n > 1, cluster synchronization is handled by hook_fn in row_reduce
+    return block_reduce(val, op, reduction_buffer, init_val)
 
 
 @cute.jit
@@ -38,14 +120,21 @@ def row_reduce(
         threads_in_group=min(threads_per_row, cute.arch.WARP_SIZE),
     )
 
-    if const_expr(hook_fn is not None):
-        hook_fn()
+    # if const_expr(threads_per_row <= cute.arch.WARP_SIZE):
+    #     return val
 
-    if const_expr(reduction_buffer is not None):
-        warps_per_row, cluster_n = reduction_buffer.shape[1]
-        assert (
-            cluster_n == 1 or mbar_ptr is not None
-        ), "mbar_ptr is required for cluster_n > 1"
+    # if const_expr(hook_fn is not None):
+    #     hook_fn()
 
-        if const_expr(warps_per_row > 1 or cluster_n > 1):
-            # This is a block-level reduction
+    # if const_expr(reduction_buffer is not None):
+    #     warps_per_row, cluster_n = reduction_buffer.shape[1]
+    #     assert (
+    #         cluster_n == 1 or mbar_ptr is not None
+    #     ), "mbar_ptr is required for cluster_n > 1"
+
+    #     if const_expr(warps_per_row > 1 or cluster_n > 1):
+    #         # This is a block-level reduction
+    #         val = block_or_cluster_reduce(
+    #             val, warp_op, reduction_buffer, mbar_ptr, phase, init_val
+    #         )
+    return val
