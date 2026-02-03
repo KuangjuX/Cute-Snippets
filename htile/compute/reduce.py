@@ -1,8 +1,11 @@
+from multiprocessing import reduction
 import cutlass
 import cutlass.cute as cute
 from cutlass import Int32, Float32, const_expr
 
 from typing import Optional, Callable, Type
+
+import htile.utils as utils
 
 import operator
 
@@ -69,6 +72,56 @@ def block_reduce(
     if lane_idx < warps_per_row:
         block_reduce_val = reduction_buffer[row_idx, lane_idx]
 
+    return cute.arch.warp_reduction(block_reduce_val, op)
+
+
+@cute.jit
+def cluster_reduce(
+    val: cute.Numeric,
+    op: Callable,
+    reduction_buffer: cute.Tensor,
+    mbar_ptr: cute.Pointer,
+    phase: Int32,
+    init_val: cute.Numeric = 0.0,
+) -> cute.Numeric:
+    """
+    Cluster reduction for cluster-level reductions.
+    """
+    cta_rank_in_cluster = cute.arch.block_idx_in_cluster()
+    lane_idx, warp_idx = cute.arch.lane_idx(), cute.arch.warp_idx()
+    rows_per_block, (warps_per_row, cluster_n) = reduction_buffer.shape
+    row_idx, col_idx = warp_idx // warps_per_row, warp_idx % warps_per_row
+
+    if warp_idx == 0:
+        with cute.arch.elect_one():
+            num_warps = rows_per_block * warps_per_row
+            cute.arch.mbarrier_arrive_and_expect_tx(
+                mbar_ptr,
+                num_warps
+                * cluster_n
+                * reduction_buffer.element_type.width
+                // 8,
+            )
+
+    if lane_idx < cluster_n:
+        utils.store_shared_remote(
+            val,
+            reduction_buffer[row_idx, lane_idx],
+            mbar_ptr,
+            cta_rank_in_cluster,
+        )
+
+    cute.arch.mbarrier_wait(mbar_ptr, phase=phase if phase is not None else 0)
+    block_reduce_val = init_val
+
+    num_iter = cute.ceil_div(warps_per_row * cluster_n, cute.arch.WARP_SIZE)
+
+    for i in cutlass.range_constexpr(num_iter):
+        idx = lane_idx + i * cute.arch.WARP_SIZE
+        if idx < cute.size(reduction_buffer, mode=[1]):
+            block_reduce_val = op(
+                block_reduce_val, reduction_buffer[row_idx, idx]
+            )
     return cute.arch.warp_reduction(block_reduce_val, op)
 
 

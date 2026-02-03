@@ -150,6 +150,27 @@ class Softmax:
     #         order=(1, 0, 2),
     #     )
 
+    def _set_cluster_n(self):
+        N = self.N
+        if const_expr(self.dtype.width == 16):
+            thresholds = [
+                (32 * 1024, 1),
+                (16 * 1024, 2),
+                (64 * 1024, 4),
+                (128 * 1024, 8),
+            ]
+        else:
+            thresholds = [
+                (32 * 1024, 1),
+                (64 * 1024, 2),
+                (128 * 1024, 4),
+                (256 * 1024, 8),
+            ]
+        for limit, cluster_n in thresholds:
+            if N <= limit:
+                return cluster_n
+        return 16
+
     @cute.jit
     def _initialize_cluster(
         self,
@@ -176,6 +197,7 @@ class Softmax:
             mX.element_type == self.dtype
         ), f"Input tensor element type {mX.element_type} does not match dtype {self.dtype}"
 
+        self._set_cluster_n()
         largest_dtype_width = const_expr(
             max(t.element_type.width for t in (mX, mO))
         )
@@ -245,9 +267,6 @@ class Softmax:
             smem, tv_layout
         )
 
-        # if tidx == 0:
-        #     cute.printf("reduction_buffer: {}\n", reduction_buffer)
-
         thr_copy_X = tiled_copy.get_slice(tidx)
 
         tXgX = thr_copy_X.partition_S(gX)
@@ -255,10 +274,6 @@ class Softmax:
 
         tXgO = thr_copy_X.partition_D(gO)
         tXcX = thr_copy_X.partition_S(cX)[(0, None), None, None]
-
-        # if tidx == 0 and bidx == 0:
-        #     cute.printf("tXcX: {}\n", tXcX)
-        #     cute.printf("tXgX: {}\n", tXgX)
 
         tXrX, tXrO = [cute.make_fragment_like(thr) for thr in (tXgX, tXgO)]
 

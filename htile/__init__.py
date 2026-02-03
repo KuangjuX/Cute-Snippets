@@ -20,14 +20,18 @@ from .copy import VectorCopy, vector_copy
 from . import compute
 from .compute import row_reduce, ReduceLayout
 
-from .utils import make_fake_tensor
+from . import utils
+from .utils import make_fake_tensor, store_shared_remote, elem_pointer
 
 __all__ = [
     "copy",
+    "compute",
+    "utils",
     "VectorCopy",
     "vector_copy",
-    "compute",
     "row_reduce",
     "ReduceLayout",
     "make_fake_tensor",
+    "store_shared_remote",
+    "elem_pointer",
 ]
