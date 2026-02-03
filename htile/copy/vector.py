@@ -48,6 +48,7 @@ class VectorCopy:
         return cute.make_tiled_copy_tv(copy_atom, thr_layout, val_layout)
 
     @cute.jit
+    # @staticmethod
     def predicate_k(self, tAcA: cute.Tensor, limit: Int32) -> cute.Tensor:
         """
         为 K 维度（通常是矩阵的列维度）生成断言张亮（Predicate Tensor），用于处理非对齐内存访问。

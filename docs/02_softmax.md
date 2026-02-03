@@ -74,56 +74,54 @@ In the visualization above, each cell (indexed 0-255) represents:
 
 This design allows the kernel to safely handle non-aligned matrix dimensions while minimizing register usage through vector skipping and row broadcasting.
 
-## 4. Reduction Buffer Layout Visualization
+## Reduction Buffer Layout and Memory Mapping
 
-The reduction buffer is used to store intermediate reduction results during the softmax computation. It is organized to support efficient warp-level and cluster-level reductions:
+The **Reduction Buffer** serves as a high-speed scratchpad in smem for inter-warp and inter-block data exachange. It is primarily used during the row-reduction phase to synchronize partial results (such as `max_x` and `sum_exp_x`) across different execution units.
 
 <p align="center">
   <img src="../media/00_layout/reduction_buffer_layout.svg" alt="reduction_buffer_layout.svg" style="max-width: 800px; width: 100%; border: 1px solid #888; box-shadow: 2px 2px 12px #ccc;" />
 </p>
 
-**Understanding the Visualization:**
+The buffer's physical organization is dynamically computed based on the thread-value mapping (`tv_layout`) and the hardware cluster configuration.
 
-The visualization shows a 2D flattened view of the reduction buffer layout with shape `(rows, cols)` where:
-- **Rows (Vertical dimension)**: Represent warps within a row group
-  - Each row corresponds to a different warp in the same row group
-  - The number of rows = `warps_per_row * cluster_n`, representing all warps that work together on the same row
-  - In the example above: 2 rows indicate either 2 warps per row with 1 cluster, or 1 warp per row with 2 clusters
-  
-- **Columns (Horizontal dimension)**: Represent warp groups across reduction stages
-  - Each column corresponds to a different warp group or reduction stage
-  - The number of columns = `num_warp_groups * stage`, representing all warp groups across all reduction stages
-  - In the example above: 8 columns indicate 4 warp groups × 2 stages (double buffering)
+The resulting layout is a 3D structure that optimizes for bank-conflict-free access and coalesced writes:
 
-**Layout Structure:**
+- **Dimension 0**: `num_warps // warps_per_row` **(Logical Rows)**:
+  - Represents the number of independent rows being processed concurrently within a single Thread Block.
 
-The reduction buffer layout is created with:
-- **Original 3D Shape**: `(num_warps // warps_per_row, (warps_per_row, cluster_n), stage)`
-  - Dimension 0: Number of warp groups (how many groups of warps work on different rows)
-  - Dimension 1: `(warps_per_row, cluster_n)` - Warps per row and cluster dimension
-  - Dimension 2: `stage` - Reduction stage (1 or 2 for double buffering)
-- **Order**: `(1, 0, 2)` - This reorders dimensions to optimize memory access patterns
+- **Dimension 1**: `(warps_per_row, cluster_n) (Reduction Peers)`:
 
-**Memory Access Pattern:**
+  - `warps_per_row`: Stores partial results from different warps working on the same row.
 
-The stride pattern `(1, total_warps_in_row)` in the 2D view reveals:
-- **Row stride = 1**: Sequential access within a row group (warps access consecutive memory locations)
-- **Column stride = total_warps_in_row**: Jumping between warp groups or stages (skipping by the number of warps in a row group)
+  - `cluster_n`: Allocates space for cross-block synchronization when using NVIDIA SM90+ Cluster features (Distributed Shared Memory).
 
-**Practical Example:**
+- **Dimension 2**: `self.stage` **(Pipeline Stages)**:
+  - Supports multi-stage reductions. For standard Softmax, this is typically `stage=2` (one for Max, one for Sum). For Online Softmax, it is often `stage=1` but stores fused `(max, sum)` pairs.
 
-In the visualization above:
-- The numbers 0-15 represent memory locations in the reduction buffer
-- **Row 0** (even numbers: 0, 2, 4, 6, 8, 10, 12, 14): First warp in each row group accesses these locations
-- **Row 1** (odd numbers: 1, 3, 5, 7, 9, 11, 13, 15): Second warp in each row group accesses these locations
-- The pattern shows that warps within the same row group access interleaved memory locations (stride=1 within row, stride=2 across columns)
-- This interleaving allows efficient parallel reduction operations where multiple warps can work simultaneously without memory conflicts
 
-**Why This Layout Design:**
+The physical memory mapping is strictly ordered as `(1, 0, 2)`:
 
-1. **Warp-Level Parallelism**: Each warp can independently perform reductions on its assigned data
-2. **Cluster Support**: The cluster dimension allows multiple clusters to work on different parts of the reduction
-3. **Double Buffering**: When `stage=2`, the layout supports overlapping computation and memory operations
-4. **Memory Coalescing**: The order `(1, 0, 2)` ensures that warps accessing consecutive memory locations (dimension 1) get the best memory bandwidth utilization
+- **Coalesced Access**: By setting the reduction peer dimension (mode 1) as the fastest-changing dimension in memory, the hardware ensures that when multiple warps write their partial results simultaneously, the accesses are coalesced and memory bank conflicts are minimized.
 
-This layout design enables efficient hierarchical reduction: threads reduce within a warp, warps reduce within a row group, and row groups reduce across the entire tile.
+- **Logical Isolation**: Stage-wise data (`mode 2`) is placed as the slowest-changing dimension to ensure clear separation between the Max and Sum reduction phases.
+
+
+The relationship between the compute layout ($T$) and the reduction buffer ($V$) can be visualized as follows:
+
+```
+[ Logical Matrix Row ]
+      |
+      +--- Processed by [Warp 0, Warp 1, ..., Warp N]
+                              |
+                              V
+[ Reduction Buffer (Smem) ]
++-------------------------------------------------------------+
+| Stage 0 (Max) | Row 0: [W0_res][W1_res]...[Wn_res]          | <-- Physical Order (1, 0)
+|               | Row 1: [W0_res][W1_res]...[Wn_res]          |
++-------------------------------------------------------------+
+| Stage 1 (Sum) | Row 0: [W0_res][W1_res]...[Wn_res]          |
+|               | Row 1: [W0_res][W1_res]...[Wn_res]          |
++-------------------------------------------------------------+
+```
+
+This structured layout allows the `block_reduce` and `cluster_reduce` functions to perform final aggregations using optimized warp-shuffle instructions after a single synchronized Smem load.
