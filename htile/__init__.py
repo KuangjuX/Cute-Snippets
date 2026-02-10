@@ -20,17 +20,23 @@ from .copy import VectorCopy, vector_copy
 from . import compute
 from .compute import row_reduce, ReduceLayout
 
+from . import types
+from .types import RegTile, VectorRegTile
+
 from . import utils
 from .utils import make_fake_tensor, store_shared_remote, elem_pointer
 
 __all__ = [
     "copy",
     "compute",
+    "types",
     "utils",
     "VectorCopy",
     "vector_copy",
     "row_reduce",
     "ReduceLayout",
+    "RegTile",
+    "VectorRegTile",
     "make_fake_tensor",
     "store_shared_remote",
     "elem_pointer",
