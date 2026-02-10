@@ -173,21 +173,21 @@ def row_reduce(
         threads_in_group=min(threads_per_row, cute.arch.WARP_SIZE),
     )
 
-    # if const_expr(threads_per_row <= cute.arch.WARP_SIZE):
-    #     return val
+    if const_expr(threads_per_row <= cute.arch.WARP_SIZE):
+        return val
 
-    # if const_expr(hook_fn is not None):
-    #     hook_fn()
+    if const_expr(hook_fn is not None):
+        hook_fn()
 
-    # if const_expr(reduction_buffer is not None):
-    #     warps_per_row, cluster_n = reduction_buffer.shape[1]
-    #     assert (
-    #         cluster_n == 1 or mbar_ptr is not None
-    #     ), "mbar_ptr is required for cluster_n > 1"
+    if const_expr(reduction_buffer is not None):
+        warps_per_row, cluster_n = reduction_buffer.shape[1]
+        assert (
+            cluster_n == 1 or mbar_ptr is not None
+        ), "mbar_ptr is required for cluster_n > 1"
 
-    #     if const_expr(warps_per_row > 1 or cluster_n > 1):
-    #         # This is a block-level reduction
-    #         val = block_or_cluster_reduce(
-    #             val, warp_op, reduction_buffer, mbar_ptr, phase, init_val
-    #         )
+        if const_expr(warps_per_row > 1 or cluster_n > 1):
+            # This is a block-level reduction
+            val = block_or_cluster_reduce(
+                val, warp_op, reduction_buffer, mbar_ptr, phase, init_val
+            )
     return val
