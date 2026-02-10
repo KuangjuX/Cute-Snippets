@@ -147,17 +147,24 @@ def run_softmax(
     # Benchmark Liger softmax if available
     avg_time_liger = None
     mem_bw_liger = None
+    liger_error = None
     if liger_softmax is not None:
         print("\n[Liger Softmax]")
-        fn_liger = lambda: liger_softmax(x)
-        avg_time_liger = benchmark_function(
-            fn_liger, warmup_iterations, iterations
-        )
-        mem_bw_liger = round(
-            2 * x.numel() * dtype.width // 8 / (avg_time_liger / 1000) / 1e9
-        )
-        print(f"Kernel execution time: {avg_time_liger:.4f} ms")
-        print(f"Mem throughput: {mem_bw_liger:.2f} GB/s")
+        try:
+            fn_liger = lambda: liger_softmax(x)
+            # Test run to catch unsupported shapes before benchmarking
+            fn_liger()
+            avg_time_liger = benchmark_function(
+                fn_liger, warmup_iterations, iterations
+            )
+            mem_bw_liger = round(
+                2 * x.numel() * dtype.width // 8 / (avg_time_liger / 1000) / 1e9
+            )
+            print(f"Kernel execution time: {avg_time_liger:.4f} ms")
+            print(f"Mem throughput: {mem_bw_liger:.2f} GB/s")
+        except RuntimeError as e:
+            liger_error = str(e)
+            print(f"⚠ Liger Softmax unsupported for this shape: {e}")
 
     return {
         "M": M,
@@ -167,7 +174,11 @@ def run_softmax(
             "latency_ms": avg_time_pytorch,
             "mem_bw_gbs": mem_bw_pytorch,
         },
-        "liger": {"latency_ms": avg_time_liger, "mem_bw_gbs": mem_bw_liger},
+        "liger": {
+            "latency_ms": avg_time_liger,
+            "mem_bw_gbs": mem_bw_liger,
+            "error": liger_error,
+        },
     }
 
 
@@ -189,15 +200,53 @@ if __name__ == "__main__":
     args = parser.parse_args()
     torch.manual_seed(0)
 
+    # ----------------------------------------------------------------
+    # Shape groups designed to exercise every kernel code path:
+    #
+    #   threads_per_row thresholds:
+    #     N ≤ 64   → 8,   N ≤ 128  → 16,  N ≤ 3072  → 32,
+    #     N ≤ 6144 → 64,  N ≤ 16384 → 128, N > 16384 → 256
+    #
+    #   num_threads: N ≤ 16384 → 128,  N > 16384 → 256
+    #
+    #   cluster_n (fp16, width=16):
+    #     N ≤ 16K → 1,  N ≤ 32K → 2,  N ≤ 64K → 4,
+    #     N ≤ 128K → 8, N > 128K → 16
+    # ----------------------------------------------------------------
+
     MN_pairs = [
-        (4096, 8192),
-        (4096, 16384),
-        (8192, 16384),
-        (16384, 16384),
+        # --- Small N: intra-warp reduction only (threads_per_row ≤ WARP_SIZE) ---
+        # (32768, 64),  # threads_per_row=8
+        # (32768, 128),  # threads_per_row=16
+        # (32768, 256),  # threads_per_row=32
+        # --- Medium N: multi-warp block reduction ---
+        (32768, 1024),  # threads_per_row=32
+        (32768, 2048),  # threads_per_row=32
+        (32768, 4096),  # threads_per_row=64
+        (32768, 6144),  # threads_per_row=64, boundary
+        # --- Large N: many warps, single cluster (cluster_n=1) ---
+        (16384, 8192),  # threads_per_row=128, num_threads=128
+        (8192, 16384),  # threads_per_row=128, num_threads=128, boundary
+        # --- Very large N: 256 threads, cluster_n=1→2 transition ---
+        (4096, 16384),  # cluster_n=1 (fp16)
+        (4096, 32768),  # cluster_n=2 (fp16)
+        # --- Cluster scaling ---
+        (4096, 65536),  # cluster_n=4 (fp16)
+        (4096, 65536),  # cluster_n=4 (fp16)
+        (4096, 131072),  # cluster_n=8 (fp16)
+        # --- Typical Transformer shapes ---
+        (4096, 8192),  # common attention head dim
+        (8192, 8192),
+        (16384, 16384),  # large square
+        # --- Non-power-of-2 N: OOB / boundary handling ---
+        # (8192, 1000),  # not aligned to any tile
+        # (4096, 12288),  # 3 * 4096, common in FFN
+        # (4096, 14336),  # LLaMA FFN intermediate size
     ]
 
     results = []
     for M, N in MN_pairs:
+        print("\n" + "-" * 80)
         result = run_softmax(
             M,
             N,
@@ -212,57 +261,39 @@ if __name__ == "__main__":
     print("Performance Summary Table")
     print("=" * 120)
 
-    if liger_softmax is not None:
-        header = f"{'[M, N]':<15} {'Ours':<30} {'torch.compile':<30} {'Liger Kernel':<30}"
-        print(header)
-        print("-" * 120)
-        sub_header = f"{'':<15} {'Latency(ms) / Memory Bandwidth (GB/s)':<30} {'Latency(ms) / Memory Bandwidth (GB/s)':<30} {'Latency(ms) / Memory Bandwidth (GB/s)':<30}"
-        print(sub_header)
-        print("-" * 120)
+    has_liger = liger_softmax is not None
 
-        for r in results:
-            mn_str = f"[{r['M']}, {r['N']}]"
-            cute_str = (
-                f"{r['cute']['latency_ms']:.4f} / {r['cute']['mem_bw_gbs']:.2f}"
-            )
-            pytorch_str = f"{r['pytorch']['latency_ms']:.4f} / {r['pytorch']['mem_bw_gbs']:.2f}"
-            liger_str = (
-                f"{r['liger']['latency_ms']:.4f} / {r['liger']['mem_bw_gbs']:.2f}"
-                if r["liger"]["latency_ms"] is not None
-                else "N/A"
-            )
-            print(
-                f"{mn_str:<15} {cute_str:<30} {pytorch_str:<30} {liger_str:<30}"
-            )
+    if has_liger:
+        header = f"{'[M, N]':<20} {'Ours':<35} {'torch.compile':<35} {'Liger Kernel':<35}"
+        sub_header = f"{'':<20} {'Latency(ms) / BW (GB/s)':<35} {'Latency(ms) / BW (GB/s)':<35} {'Latency(ms) / BW (GB/s)':<35}"
+        sep_width = 125
     else:
-        header = f"{'[M, N]':<15} {'Ours':<30} {'torch.compile':<30}"
-        print(header)
-        print("-" * 90)
-        sub_header = f"{'':<15} {'Latency(ms) / Memory Bandwidth (GB/s)':<30} {'Latency(ms) / Memory Bandwidth (GB/s)':<30}"
-        print(sub_header)
-        print("-" * 90)
+        header = f"{'[M, N]':<20} {'Ours':<35} {'torch.compile':<35}"
+        sub_header = f"{'':<20} {'Latency(ms) / BW (GB/s)':<35} {'Latency(ms) / BW (GB/s)':<35}"
+        sep_width = 90
 
-        for r in results:
-            mn_str = f"[{r['M']}, {r['N']}]"
-            cute_str = (
-                f"{r['cute']['latency_ms']:.4f} / {r['cute']['mem_bw_gbs']:.2f}"
+    print(header)
+    print("-" * sep_width)
+    print(sub_header)
+    print("-" * sep_width)
+
+    for r in results:
+        mn_str = f"[{r['M']}, {r['N']}]"
+        cute_str = (
+            f"{r['cute']['latency_ms']:.4f} / {r['cute']['mem_bw_gbs']:.2f}"
+        )
+        pytorch_str = f"{r['pytorch']['latency_ms']:.4f} / {r['pytorch']['mem_bw_gbs']:.2f}"
+        if has_liger:
+            if r["liger"].get("error"):
+                liger_str = "unsupported"
+            elif r["liger"]["latency_ms"] is not None:
+                liger_str = f"{r['liger']['latency_ms']:.4f} / {r['liger']['mem_bw_gbs']:.2f}"
+            else:
+                liger_str = "N/A"
+            print(
+                f"{mn_str:<20} {cute_str:<35} {pytorch_str:<35} {liger_str:<35}"
             )
-            pytorch_str = f"{r['pytorch']['latency_ms']:.4f} / {r['pytorch']['mem_bw_gbs']:.2f}"
-            print(f"{mn_str:<15} {cute_str:<30} {pytorch_str:<30}")
+        else:
+            print(f"{mn_str:<20} {cute_str:<35} {pytorch_str:<35}")
 
-    print("=" * 120)
-
-    # MN_pairs = [(32768, 256), (32768, 512), (32768, 1024), (32768, 2048), (32768, 4096), (32768, 8192), (32768, 16384), (32768, 32768), (32768, 65536), (16384, 131072), (8192, 262144)]
-    # # MN_pairs = [(32768, 1024)]
-    # results = []
-    # for M, N in MN_pairs:
-    #     res = run_softmax(
-    #         M,
-    #         N,
-    #         dtype=args.dtype,
-    #         warmup_iterations=args.warmup_iterations,
-    #         iterations=args.iterations,
-    #     )
-    #     results.append(res)
-    # # print(results)
-    # print([x for x, _ in results])
+    print("=" * sep_width)
