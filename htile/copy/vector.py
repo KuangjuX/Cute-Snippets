@@ -51,7 +51,7 @@ class VectorCopy:
     # @staticmethod
     def predicate_k(self, tAcA: cute.Tensor, limit: Int32) -> cute.Tensor:
         """
-        为 K 维度（通常是矩阵的列维度）生成断言张亮（Predicate Tensor），用于处理非对齐内存访问。
+        为 K 维度（通常是矩阵的列维度）生成断言张量（Predicate Tensor），用于处理非对齐内存访问。
 
         参数：
             tAcA：线程持有的坐标张量（Identity Tensor 的 partition 结果）。存储了
