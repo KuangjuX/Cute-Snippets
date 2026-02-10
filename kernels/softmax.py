@@ -16,7 +16,7 @@ import cuda.bindings.driver as cuda
 from cutlass import Int64, Float32, const_expr, Int32, Float16, BFloat16
 from cutlass.cute.runtime import from_dlpack
 
-from typing import Type
+from typing import Optional, Type
 from functools import partial
 
 import sys
@@ -37,18 +37,20 @@ class Softmax:
         self,
         dtype: Type[cutlass.Numeric],
         N: int,
-        cluster_n: int,
+        cluster_n: Optional[int],
         online_softmax: bool = False,
     ):
         """
         Args:
             dtype: Data type for computation
             N: Size of the last dimension
-            cluster_n: Number of blocks in cluster (1 for no cluster)
+            cluster_n: Number of blocks in cluster (1 for no cluster). Use None for auto.
             online_softmax: Whether to use online softmax algorithm
         """
         self.dtype = dtype
         self.N = N
+        if cluster_n is None:
+            cluster_n = self._set_cluster_n()
         self.cluster_n = cluster_n
         self.stage = 2 if not online_softmax else 1
         self.online_softmax = online_softmax
@@ -79,9 +81,8 @@ class Softmax:
         for limit, threads in [
             (64, 8),
             (128, 16),
-            (2048, 32),  # Lower threshold for 32 threads
-            (4096, 32),  # Keep 32 for medium N
-            (8192, 64),  # Lower threshold for 64 threads
+            (3072, 32),
+            (6144, 64),
             (16384, 128),
         ]:
             if N <= limit:
@@ -96,7 +97,7 @@ class Softmax:
     ) -> tuple[cute.Tensor, cute.Tensor]:
 
         reduction_buffer = smem.allocate_tensor(
-            self.dtype,
+            cutlass.Float32,
             self.reduce_layout.make_layout(),
             byte_alignment=8,
         )
@@ -154,8 +155,8 @@ class Softmax:
         N = self.N
         if const_expr(self.dtype.width == 16):
             thresholds = [
-                (32 * 1024, 1),
-                (16 * 1024, 2),
+                (16 * 1024, 1),
+                (32 * 1024, 2),
                 (64 * 1024, 4),
                 (128 * 1024, 8),
             ]
@@ -197,7 +198,6 @@ class Softmax:
             mX.element_type == self.dtype
         ), f"Input tensor element type {mX.element_type} does not match dtype {self.dtype}"
 
-        self._set_cluster_n()
         largest_dtype_width = const_expr(
             max(t.element_type.width for t in (mX, mO))
         )
@@ -214,6 +214,9 @@ class Softmax:
         )
 
         tiled_copy = self.vector_copy.tiled_copy_2d()
+
+        # cute.printf("tiler_mn: {}\n", tiler_mn)
+        # cute.printf("blockX: {}\n", cute.ceil_div(mX.shape[0], tiler_mn[0]))
 
         self.kernel(mX, mO, tiler_mn, tiled_copy, threads_per_row).launch(
             grid=[cute.ceil_div(mX.shape[0], tiler_mn[0]), self.cluster_n, 1],
@@ -276,6 +279,10 @@ class Softmax:
         tXcX = thr_copy_X.partition_S(cX)[(0, None), None, None]
 
         tXrX, tXrO = [cute.make_fragment_like(thr) for thr in (tXgX, tXgO)]
+
+        # if tidx == 0:
+        #     cute.printf("tXrX: {}\n", tXrX)
+        #     cute.printf("tXrO: {}\n", tXrO)
 
         # Handle non-even boundary memory safe access
         is_even_N = const_expr(shape[1] == tiler_mn[1] * self.cluster_n)
@@ -364,7 +371,7 @@ def _softmax_fwd(x: torch.Tensor, out: torch.Tensor) -> None:
             make_fake_tensor(dt, (batch_sym, N), div)
             for dt in [dtype, out_dtype]
         ]
-        softmax_op = Softmax(dtype, N, cluster_n=1)
+        softmax_op = Softmax(dtype, N, cluster_n=None)
         _softmax_fwd.compile_cache[compile_key] = cute.compile(
             softmax_op,
             x_cute,
@@ -373,7 +380,7 @@ def _softmax_fwd(x: torch.Tensor, out: torch.Tensor) -> None:
             options="--enable-tvm-ffi",
         )
 
-        _softmax_fwd.compile_cache[compile_key](x, out)
+    _softmax_fwd.compile_cache[compile_key](x, out)
 
 
 _softmax_fwd.compile_cache = {}
