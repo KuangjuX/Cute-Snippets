@@ -306,6 +306,12 @@ class Softmax:
         cute.arch.cp_async_commit_group()
         cute.arch.cp_async_wait_group(0)
 
+        # Fill OOB values with -inf to avoid corrupting max and sum in softmax.
+        # cp_async fills OOB with 0 by default, but exp(0)=1 would corrupt the
+        # denominator, and max(x,0) would corrupt the max when all values < 0.
+        if const_expr(not is_even_N):
+            hcopy.fill_oob(tXsX, tXpX, -sX.element_type.inf)
+
         cute.autovec_copy(tXsX, tXrX)
         x = tXrX.load().to(cute.Float32)
 

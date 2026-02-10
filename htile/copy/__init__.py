@@ -1,3 +1,3 @@
-from .vector import VectorCopy, vector_copy
+from .vector import VectorCopy, vector_copy, fill_oob
 
-__all__ = ["VectorCopy", "vector_copy"]
+__all__ = ["VectorCopy", "vector_copy", "fill_oob"]

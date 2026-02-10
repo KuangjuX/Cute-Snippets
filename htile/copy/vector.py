@@ -105,6 +105,30 @@ class VectorCopy:
         return tApA
 
 
+@cute.jit
+def fill_oob(
+    smem_tensor: cute.Tensor,
+    pred: cute.Tensor,
+    fill_val: cute.Numeric,
+):
+    """
+    Fill out-of-bounds elements in shared memory with a given value.
+
+    After cp_async loads data into shared memory, OOB positions are filled with 0.
+    For softmax, these should be -inf so that exp(-inf)=0 and max(x,-inf)=x.
+
+    Args:
+        smem_tensor: The shared memory tensor (partitioned, same layout as pred).
+        pred: The predicate tensor from predicate_k, indicating valid elements.
+        fill_val: The value to fill OOB positions with (e.g., -inf).
+    """
+    for rest_v in cutlass.range_constexpr(pred.shape[0]):
+        for rest_k in cutlass.range_constexpr(pred.shape[2]):
+            if not pred[rest_v, 0, rest_k]:
+                for rest_m in cutlass.range_constexpr(smem_tensor.shape[1]):
+                    smem_tensor[(0, rest_v), rest_m, rest_k] = fill_val
+
+
 @dsl_user_op
 def vector_copy(
     src: cute.Tensor,
