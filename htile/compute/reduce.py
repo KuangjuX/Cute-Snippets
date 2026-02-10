@@ -106,9 +106,12 @@ def cluster_reduce(
     if lane_idx < cluster_n:
         utils.store_shared_remote(
             val,
-            reduction_buffer[row_idx, lane_idx],
+            utils.elem_pointer(
+                reduction_buffer,
+                (row_idx, (col_idx, cta_rank_in_cluster)),
+            ),
             mbar_ptr,
-            cta_rank_in_cluster,
+            peer_cta_rank_in_cluster=lane_idx,
         )
 
     cute.arch.mbarrier_wait(mbar_ptr, phase=phase if phase is not None else 0)
@@ -136,9 +139,13 @@ def block_or_cluster_reduce(
 ) -> cute.Numeric:
     """
     Block or cluster reduction for warp-level or cluster-level reductions.
+    Dispatches to cluster_reduce when mbar_ptr is provided (cluster_n > 1),
+    otherwise falls back to block_reduce.
     """
-    # block_reduce handles reduction across warps within a block
-    # When cluster_n > 1, cluster synchronization is handled by hook_fn in row_reduce
+    if const_expr(mbar_ptr is not None):
+        return cluster_reduce(
+            val, op, reduction_buffer, mbar_ptr, phase, init_val
+        )
     return block_reduce(val, op, reduction_buffer, init_val)
 
 
@@ -173,9 +180,6 @@ def row_reduce(
         threads_in_group=min(threads_per_row, cute.arch.WARP_SIZE),
     )
 
-    if const_expr(threads_per_row <= cute.arch.WARP_SIZE):
-        return val
-
     if const_expr(hook_fn is not None):
         hook_fn()
 
@@ -183,11 +187,15 @@ def row_reduce(
         warps_per_row, cluster_n = reduction_buffer.shape[1]
         assert (
             cluster_n == 1 or mbar_ptr is not None
-        ), "mbar_ptr is required for cluster_n > 1"
+        ), "mbar_ptr must be provided for cluster reduction"
 
         if const_expr(warps_per_row > 1 or cluster_n > 1):
-            # This is a block-level reduction
             val = block_or_cluster_reduce(
-                val, warp_op, reduction_buffer, mbar_ptr, phase, init_val
+                val,
+                warp_op,
+                reduction_buffer,
+                mbar_ptr,
+                phase=phase,
+                init_val=init_val,
             )
     return val

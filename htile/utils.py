@@ -4,9 +4,9 @@ from typing import Optional
 
 import cutlass
 import cutlass.cute as cute
-from cutlass import Float32, Int32
+from cutlass import Float32, Int32, const_expr
 from cutlass._mlir.dialects import llvm
-from cutlass.cutlass_dsl import dsl_user_op
+from cutlass.cutlass_dsl import T, dsl_user_op
 
 
 def make_fake_tensor(
@@ -33,6 +33,29 @@ def elem_pointer(
     x: cute.Tensor, coord: cute.Coord, *, loc=None, ip=None
 ) -> cute.Pointer:
     return x.iterator + cute.crd2idx(coord, x.layout, loc=loc, ip=ip)
+
+
+@dsl_user_op
+def set_block_rank(
+    smem_ptr: cute.Pointer,
+    peer_cta_rank_in_cluster: Int32,
+    *,
+    loc=None,
+    ip=None,
+) -> Int32:
+    """Map the given smem pointer to the address at another CTA rank in the cluster."""
+    smem_ptr_i32 = smem_ptr.toint(loc=loc, ip=ip).ir_value()
+    return Int32(
+        llvm.inline_asm(
+            T.i32(),
+            [smem_ptr_i32, peer_cta_rank_in_cluster.ir_value()],
+            "mapa.shared::cluster.u32 $0, $1, $2;",
+            "=r,r,r",
+            has_side_effects=False,
+            is_align_stack=False,
+            asm_dialect=llvm.AsmDialect.AD_ATT,
+        )
+    )
 
 
 @dsl_user_op
