@@ -15,6 +15,24 @@ if str(project_root) not in sys.path:
 from kernels.softmax import softmax_fwd
 
 
+def run_softmax_case(M: int, N: int) -> bool:
+    x = torch.randn(M, N, dtype=torch.float16, device="cuda")
+    out = softmax_fwd(x)
+
+    # Check results
+    out_cpu = out.cpu()
+    # Safe softmax reference: subtract max to avoid overflow
+    x_fp32 = x.cpu().to(torch.float32)
+    x_shifted = x_fp32 - x_fp32.max(dim=1, keepdim=True).values
+    ref = torch.exp(x_shifted)
+    ref = ref / ref.sum(dim=1, keepdim=True)
+    ref = ref.to(torch.float16)
+
+    max_diff = torch.max(torch.abs(ref - out_cpu)).item()
+    print(f"Max difference: {max_diff}")
+    return max_diff < 1e-2
+
+
 def test_softmax():
     """Test Softmax kernel using softmax_fwd function."""
     print("\n" + "=" * 60)
@@ -33,35 +51,28 @@ def test_softmax():
         return True
 
     try:
-        M, N = 64, 2048
+        test_cases = [
+            (128, 256),
+            (256, 2048),
+            (64, 8192),
+            (32, 32768),  # larger N triggers cluster auto-selection
+        ]
 
-        x = torch.randn(M, N, dtype=torch.float16, device="cuda")
+        all_ok = True
+        for M, N in test_cases:
+            print(f"\nRunning softmax kernel: M={M}, N={N}")
+            case_ok = run_softmax_case(M, N)
+            if case_ok:
+                print("✓ Case PASSED")
+            else:
+                print("✗ Case FAILED")
+                all_ok = False
 
-        print("Running softmax kernel...")
-        out = softmax_fwd(x)
-
-        # Check results
-        out_cpu = out.cpu()
-        # Safe softmax reference: subtract max to avoid overflow
-        x_fp32 = x.cpu().to(torch.float32)
-        x_shifted = x_fp32 - x_fp32.max(dim=1, keepdim=True).values
-        ref = torch.exp(x_shifted)
-
-        # print(f"ref.sum: {ref.sum(dim=1)}")
-        ref = ref / ref.sum(dim=1, keepdim=True)
-        ref = ref.to(torch.float16)
-
-        max_diff = torch.max(torch.abs(ref - out_cpu)).item()
-        print(f"Output: {out_cpu.flatten()}")
-        print(f"Softmax ref: {ref.flatten()}")
-        print(f"Max difference: {max_diff}")
-
-        if max_diff < 1e-2:
+        if all_ok:
             print("✓ Cute-Snippets Softmax PASSED")
             return True
-        else:
-            print(f"✗ Cute-Snippets Softmax FAILED: max_diff={max_diff}")
-            return False
+        print("✗ Cute-Snippets Softmax FAILED")
+        return False
 
     except Exception as e:
         print(f"✗ Cute-Snippets Softmax FAILED: {e}")
