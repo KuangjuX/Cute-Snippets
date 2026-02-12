@@ -1,12 +1,53 @@
 # Copyright (c) 2025, Wentao Guo, Ted Zadouri, Tri Dao.
 
 from typing import Optional
+import torch
 
 import cutlass
 import cutlass.cute as cute
-from cutlass import Float32, Int32, const_expr
+from cutlass import Float32, Int32, const_expr, Float16, BFloat16, Int64
 from cutlass._mlir.dialects import llvm
 from cutlass.cutlass_dsl import T, dsl_user_op
+
+
+torch2cute_dtype_map = {
+    torch.float16: Float16,
+    torch.bfloat16: BFloat16,
+    torch.float32: Float32,
+    torch.int32: Int32,
+    torch.int64: Int64,
+}
+
+
+@cute.jit
+def expand(a: cute.Tensor, dim: int, size) -> cute.Tensor:
+    """Broadcast-expand a CuTe tensor by inserting a new dimension with stride=0.
+
+    This is the CuTe equivalent of ``torch.unsqueeze(dim).expand(size)``
+    — it inserts a new axis at position *dim* whose size is *size* and
+    whose stride is **0**, so every index along that axis aliases the
+    same underlying memory (zero-copy broadcast).
+
+    Args:
+        a: Source CuTe tensor.
+        dim: Position at which to insert the new dimension
+             (0 ≤ dim ≤ rank(a)).
+        size: Extent of the new dimension (Int32, int, or sym value).
+
+    Returns:
+        A new CuTe tensor that shares ``a``'s data pointer but has one
+        extra dimension.
+
+    Example::
+
+        # mW has shape (N,), stride (1,)
+        mW2d = expand(mW, dim=0, size=M)
+        # → shape (M, N), stride (0, 1)
+        # mW2d[i, j] == mW[j]  for all i  (broadcast along rows)
+    """
+    shape = (*a.shape[:dim], size, *a.shape[dim:])
+    stride = (*a.layout.stride[:dim], 0, *a.layout.stride[dim:])
+    return cute.make_tensor(a.iterator, cute.make_layout(shape, stride=stride))
 
 
 def make_fake_tensor(
