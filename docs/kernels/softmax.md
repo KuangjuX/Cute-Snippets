@@ -75,7 +75,7 @@ def kernel(self, mX, mO, tiler_mn, tiled_copy, threads_per_row):
 ## Technical Deep Dive: Tensor Layouts and Boundary Handling
 
 <p align="center">
-  <img src="../media/00_layout/tiled_tv_layout.svg" alt="tiled_tv_layout.svg" style="max-width: 800px; width: 100%; border: 1px solid #888; box-shadow: 2px 2px 12px #ccc;" />
+  <img src="../../media/00_layout/tiled_tv_layout.svg" alt="tiled_tv_layout.svg" style="max-width: 800px; width: 100%; border: 1px solid #888; box-shadow: 2px 2px 12px #ccc;" />
 </p>
 
 ### 1. Hierarchical Layout Decomposition
@@ -107,7 +107,7 @@ The `predicate_k` function (in `htile/copy/vector.py`) optimizes register usage 
 The predicate tensor `tApA` is created with a layout that efficiently represents boundary checks for vectorized memory accesses:
 
 <p align="center">
-  <img src="../media/00_layout/tApA_layout.svg" alt="tApA_layout.svg" style="max-width: 1000px; width: 100%; border: 1px solid #888; box-shadow: 2px 2px 12px #ccc;" />
+  <img src="../../media/00_layout/tApA_layout.svg" alt="tApA_layout.svg" style="max-width: 1000px; width: 100%; border: 1px solid #888; box-shadow: 2px 2px 12px #ccc;" />
 </p>
 
 **Understanding the Visualization:**
@@ -150,7 +150,7 @@ The `fill_oob` function iterates over the predicate tensor and writes `-inf` to 
 The **Reduction Buffer** serves as a high-speed scratchpad in shared memory for inter-warp and inter-block data exchange. It is primarily used during the row-reduction phase to synchronize partial results (`max_x` and `sum_exp_x`) across different execution units.
 
 <p align="center">
-  <img src="../media/00_layout/reduction_buffer_layout.svg" alt="reduction_buffer_layout.svg" style="max-width: 800px; width: 100%; border: 1px solid #888; box-shadow: 2px 2px 12px #ccc;" />
+  <img src="../../media/00_layout/reduction_buffer_layout.svg" alt="reduction_buffer_layout.svg" style="max-width: 800px; width: 100%; border: 1px solid #888; box-shadow: 2px 2px 12px #ccc;" />
 </p>
 
 The buffer's physical organization is computed by `ReduceLayout` based on the thread configuration and cluster size.
