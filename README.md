@@ -80,7 +80,7 @@ We believe in clear, comprehensive documentation.
 
 - **[Design Philosophy](docs/design.md)**: Learn about HTile, the separation of concerns, and the core architecture.
 - **[RMSNorm Implementation](docs/kernels/rmsnorm.md)**: Deep dive into the RMSNorm kernel, including math and optimizations.
-- **[Softmax Implementation](docs/softmax.md)**: Understanding the Softmax kernel.
+- **[Softmax Implementation](docs/kernels/softmax.md)**: Understanding the Softmax kernel.
 
 ## 📂 Repository Structure
 
