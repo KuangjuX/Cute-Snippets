@@ -23,7 +23,7 @@ class ReduceLayout:
         cluster_n: int,
         stage: int,
     ):
-        self.warps_per_row = threads_per_row // cute.arch.WARP_SIZE
+        self.warps_per_row = max(threads_per_row // cute.arch.WARP_SIZE, 1)
         self.num_warps = threads // cute.arch.WARP_SIZE
         self.cluster_n = cluster_n
         self.stage = stage
