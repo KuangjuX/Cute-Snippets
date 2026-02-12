@@ -100,7 +100,7 @@ Cute-Snippets/
 
 ## 📊 Benchmarks
 
-All benchmarks run on NVIDIA H100 GPU with `dtype=float16`.
+All benchmarks run on NVIDIA H800 GPU with `dtype=float16`.
 
 ### RMSNorm
 
@@ -125,8 +125,14 @@ All benchmarks run on NVIDIA H100 GPU with `dtype=float16`.
 | [4096, 65536] | 0.362 / 2968 | 0.745 / 1441 | 0.582 / 1847 |
 | [4096, 131072] | 0.717 / 2996 | 1.499 / 1432 | ❌ Unsupported |
 
+**Performance Evaluation (H800 GPU):**
+
+<div align="center">
+  <img src="media/kernels/evaluation.png" alt="Performance Evaluation Charts" width="100%"/>
+</div>
+
 **Highlights:**
-- **~2900 GB/s** sustained bandwidth across all shapes, approaching H100's theoretical HBM bandwidth.
+- **~2900 GB/s** sustained bandwidth across all shapes, approaching H800's theoretical HBM bandwidth.
 - **1.2×–1.9× faster** than `torch.compile` for RMSNorm; **1.2×–2.7× faster** for Softmax.
 - **3× faster** than Liger Kernel (Triton) for large N (≥ 65K) thanks to Hopper cluster support.
 - Scales smoothly from N=256 to N=131K — Triton-based kernels fail at N=131K.

@@ -188,7 +188,7 @@ The kernel uses `ElementwiseTileConfig` to automatically select optimal paramete
 
 ## Performance Evaluation
 
-Benchmarked on NVIDIA H100 GPU with `dtype=float16`, comparing against `torch.compile` and [Liger Kernel](https://github.com/linkedin/Liger-Kernel) (Triton-based):
+Benchmarked on NVIDIA H800 GPU with `dtype=float16`, comparing against `torch.compile` and [Liger Kernel](https://github.com/linkedin/Liger-Kernel) (Triton-based):
 
 ```
 =============================================================================================================================
@@ -218,7 +218,7 @@ Performance Summary Table
 
 ### Key Observations
 
-1. **Consistently high bandwidth:** Our kernel achieves **2700–2970 GB/s** across all tested shapes, approaching the theoretical HBM bandwidth of the H100 (~3.35 TB/s).
+1. **Consistently high bandwidth:** Our kernel achieves **2700–2970 GB/s** across all tested shapes, approaching the theoretical HBM bandwidth of the H800 (~3.35 TB/s).
 
 2. **vs. `torch.compile`:** Our kernel is **1.2×–1.9× faster** than `torch.compile` across all shapes. The gap widens for larger \( N \) values, where our cluster-based reduction and async copy pipeline provide the most benefit.
 

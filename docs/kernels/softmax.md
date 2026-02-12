@@ -254,7 +254,7 @@ out = softmax_fwd(x)
 
 ## Performance Evaluation
 
-Benchmarked on NVIDIA H100 GPU with `dtype=float16`, comparing against `torch.compile` and [Liger Kernel](https://github.com/linkedin/Liger-Kernel) (Triton-based):
+Benchmarked on NVIDIA H800 GPU with `dtype=float16`, comparing against `torch.compile` and [Liger Kernel](https://github.com/linkedin/Liger-Kernel) (Triton-based):
 
 ```
 ========================================================================================================================
@@ -283,7 +283,7 @@ Performance Summary Table
 
 ### Key Observations
 
-1. **Near-peak bandwidth:** Our kernel achieves **2700–3000 GB/s** across all tested shapes, approaching the theoretical HBM bandwidth of the H100.
+1. **Near-peak bandwidth:** Our kernel achieves **2700–3000 GB/s** across all tested shapes, approaching the theoretical HBM bandwidth of the H800.
 
 2. **vs. `torch.compile`:** Our kernel is **1.2×–2.7× faster** than `torch.compile`. The advantage is most pronounced for medium-to-large \( N \) values where `torch.compile` cannot leverage cluster-level parallelism.
 
