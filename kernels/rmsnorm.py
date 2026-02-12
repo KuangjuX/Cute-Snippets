@@ -14,7 +14,7 @@ The RMSNorm class now focuses on the algorithm-specific dataflow:
 import sys
 import torch
 import cutlass
-from cutlass import const_expr, Float32
+from cutlass import const_expr, Float32, Int32
 import cutlass.cute as cute
 from typing import Type, Optional, Tuple
 import cuda.bindings.driver as cuda
